@@ -5,39 +5,39 @@
 
 #include "font_data.h"
 
-#define SW 384
-#define SH 216
-#define RGB(r, g, b) ((unsigned short)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3)))
+#define SCRW 384
+#define SCRH 216
+#define MKRGB(r, g, b) ((unsigned short)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3)))
 
 static unsigned short *g_vram;
 
 /* ------------------------------------------------------------------ */
 /*  Primitivas                                                         */
 /* ------------------------------------------------------------------ */
-static void px(int x, int y, unsigned short c) {
-    if ((unsigned)x < SW && (unsigned)y < SH) g_vram[y * SW + x] = c;
+static void gx_px(int x, int y, unsigned short c) {
+    if ((unsigned)x < SCRW && (unsigned)y < SCRH) g_vram[y * SCRW + x] = c;
 }
 
-static void rect(int x, int y, int w, int h, unsigned short c) {
+static void gx_rect(int x, int y, int w, int h, unsigned short c) {
     int i, j;
     for (j = y; j < y + h; j++) {
-        if ((unsigned)j >= SH) continue;
-        for (i = x; i < x + w; i++) if ((unsigned)i < SW) g_vram[j * SW + i] = c;
+        if ((unsigned)j >= SCRH) continue;
+        for (i = x; i < x + w; i++) if ((unsigned)i < SCRW) g_vram[j * SCRW + i] = c;
     }
 }
 
-static void frame(int x, int y, int w, int h, unsigned short c) {
-    rect(x, y, w, 1, c); rect(x, y + h - 1, w, 1, c);
-    rect(x, y, 1, h, c); rect(x + w - 1, y, 1, h, c);
+static void gx_frame(int x, int y, int w, int h, unsigned short c) {
+    gx_rect(x, y, w, 1, c); gx_rect(x, y + h - 1, w, 1, c);
+    gx_rect(x, y, 1, h, c); gx_rect(x + w - 1, y, 1, h, c);
 }
 
-static void line(int x0, int y0, int x1, int y1, unsigned short c) {
+static void gx_line(int x0, int y0, int x1, int y1, unsigned short c) {
     int dx = x1 - x0, dy = y1 - y0, sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1, e, e2;
     if (dx < 0) dx = -dx;
     if (dy < 0) dy = -dy;
     e = dx - dy;
     for (;;) {
-        px(x0, y0, c);
+        gx_px(x0, y0, c);
         if (x0 == x1 && y0 == y1) break;
         e2 = 2 * e;
         if (e2 > -dy) { e -= dy; x0 += sx; }
@@ -85,7 +85,7 @@ static int put_cp(const Font *f, unsigned cp, int x, int base, int draw,
         for (r = 0; r < f->h; r++)
             for (c = 0; c < g->w; c++) {
                 int a = (f->d[g->off + r * rb + (c >> 2)] >> (6 - 2 * (c & 3))) & 3;
-                if (a) px(x + g->xoff + c, base - f->asc + r, pal[a]);
+                if (a) gx_px(x + g->xoff + c, base - f->asc + r, pal[a]);
             }
     }
     return g->adv;
@@ -133,7 +133,7 @@ static int text_wrap(const Font *f, int x, int base, int maxw, int lh, int inden
 /*   \p{a}  parentesis que se estiran     \t{texto}  texto recto       */
 /*   \*  punto medio    \x  signo por                                  */
 /* ------------------------------------------------------------------ */
-typedef struct { int w, asc, desc; } Box;
+typedef struct { int w, asc, desc; } MBox;
 
 static int M_DRAW;
 static unsigned short M_FG = 0, M_BG = 0xFFFF;
@@ -145,19 +145,19 @@ static int m_isdesc(unsigned cp) {
     return 0;
 }
 
-static void m_seq(const char **p, int level, int fd, int tm, int x, int base, char stop, Box *b);
+static void m_seq(const char **p, int level, int fd, int tm, int x, int base, char stop, MBox *b);
 
-static const char *m_group(const char *q, int level, int fd, int tm, int x, int base, Box *b) {
+static const char *m_group(const char *q, int level, int fd, int tm, int x, int base, MBox *b) {
     m_seq(&q, level, fd, tm, x, base, '}', b);
     return q;
 }
-static const char *m_meas(const char *q, int level, int fd, int tm, Box *b) {
+static const char *m_meas(const char *q, int level, int fd, int tm, MBox *b) {
     int o = M_DRAW; const char *e;
     M_DRAW = 0; e = m_group(q, level, fd, tm, 0, 0, b); M_DRAW = o;
     return e;
 }
 
-static void m_glyph(unsigned cp, int level, int tm, int x, int base, Box *b) {
+static void m_glyph(unsigned cp, int level, int tm, int x, int base, MBox *b) {
     const Font *f;
     int italic = (!tm && ((cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z')));
     if (!tm && cp == '-' && !level) cp = 0x2212;   /* la fuente pequena no trae el signo menos largo */
@@ -167,7 +167,7 @@ static void m_glyph(unsigned cp, int level, int tm, int x, int base, Box *b) {
     b->desc = m_isdesc(cp) ? f->dsc : 0;
 }
 
-static void m_atom(const char **p, int level, int fd, int tm, int x, int base, Box *b) {
+static void m_atom(const char **p, int level, int fd, int tm, int x, int base, MBox *b) {
     char c = **p;
     b->w = 0; b->asc = 0; b->desc = 0;
     if (c == '{') {
@@ -181,7 +181,7 @@ static void m_atom(const char **p, int level, int fd, int tm, int x, int base, B
         if (k == 'x') { m_glyph(0xD7, level, 1, x, base, b); return; }
         if (k == 't') { if (**p == '{') *p = m_group(*p + 1, level, fd, 1, x, base, b); return; }
         if (k == 'f') {
-            Box A, B; const char *qa, *qb, *e1, *e2;
+            MBox A, B; const char *qa, *qb, *e1, *e2;
             int l2 = (level || fd >= 1) ? 1 : 0, axis = level ? 3 : 4;
             int w, bar, nb, db;
             qa = *p + 1;
@@ -196,38 +196,38 @@ static void m_atom(const char **p, int level, int fd, int tm, int x, int base, B
             b->asc = base - (nb - A.asc);
             b->desc = db + B.desc - base;
             if (M_DRAW) {
-                Box t;
+                MBox t;
                 m_group(qa, l2, fd + 1, tm, x + (w - A.w) / 2, nb, &t);
                 m_group(qb, l2, fd + 1, tm, x + (w - B.w) / 2, db, &t);
-                rect(x + 1, bar, w - 2, 1, M_FG);
+                gx_rect(x + 1, bar, w - 2, 1, M_FG);
             }
             *p = e2;
             return;
         }
         if (k == 'r') {
-            Box I; const char *e; int top, bot, mid, ox = 9;
+            MBox I; const char *e; int top, bot, mid, ox = 9;
             if (**p != '{') return;
             e = m_meas(*p + 1, level, fd, tm, &I);
             top = base - I.asc - 3; bot = base + I.desc + 1; mid = top + (bot - top) * 55 / 100;
             if (M_DRAW) {
-                Box t;
+                MBox t;
                 m_group(*p + 1, level, fd, tm, x + ox, base, &t);
-                line(x, mid, x + 3, bot, M_FG);
-                line(x + 3, bot, x + 7, top, M_FG);
-                line(x + 4, bot, x + 8, top, M_FG);
-                rect(x + 7, top, I.w + ox - 7 + 2, 1, M_FG);
+                gx_line(x, mid, x + 3, bot, M_FG);
+                gx_line(x + 3, bot, x + 7, top, M_FG);
+                gx_line(x + 4, bot, x + 8, top, M_FG);
+                gx_rect(x + 7, top, I.w + ox - 7 + 2, 1, M_FG);
             }
             b->w = ox + I.w + 3; b->asc = I.asc + 4; b->desc = I.desc + 1;
             *p = e;
             return;
         }
         if (k == 'p') {
-            Box I; const char *e; int h;
+            MBox I; const char *e; int h;
             if (**p != '{') return;
             e = m_meas(*p + 1, level, fd, tm, &I);
             h = I.asc + I.desc;
             if (h <= 15) {
-                Box a1, a2, t; int xi;
+                MBox a1, a2, t; int xi;
                 m_glyph('(', level, 1, x, base, &a1);
                 xi = x + a1.w;
                 if (M_DRAW) m_group(*p + 1, level, fd, tm, xi, base, &t);
@@ -239,12 +239,12 @@ static void m_atom(const char **p, int level, int fd, int tm, int x, int base, B
                 int top = base - I.asc - 1, bot = base + I.desc + 1, q = (bot - top) / 4, mid = (top + bot) / 2;
                 int ix = x + 6, rx = ix + I.w + 2;
                 if (M_DRAW) {
-                    Box t;
+                    MBox t;
                     m_group(*p + 1, level, fd, tm, ix, base, &t);
-                    line(x + 4, top, x + 1, top + q, M_FG); line(x + 1, top + q, x + 1, bot - q, M_FG);
-                    line(x + 1, bot - q, x + 4, bot, M_FG);
-                    line(rx + 1, top, rx + 4, top + q, M_FG); line(rx + 4, top + q, rx + 4, bot - q, M_FG);
-                    line(rx + 4, bot - q, rx + 1, bot, M_FG);
+                    gx_line(x + 4, top, x + 1, top + q, M_FG); gx_line(x + 1, top + q, x + 1, bot - q, M_FG);
+                    gx_line(x + 1, bot - q, x + 4, bot, M_FG);
+                    gx_line(rx + 1, top, rx + 4, top + q, M_FG); gx_line(rx + 4, top + q, rx + 4, bot - q, M_FG);
+                    gx_line(rx + 4, bot - q, rx + 1, bot, M_FG);
                     (void)mid;
                 }
                 b->w = I.w + 12; b->asc = I.asc + 2; b->desc = I.desc + 2;
@@ -260,11 +260,11 @@ static void m_atom(const char **p, int level, int fd, int tm, int x, int base, B
     }
 }
 
-static void m_seq(const char **p, int level, int fd, int tm, int x, int base, char stop, Box *b) {
+static void m_seq(const char **p, int level, int fd, int tm, int x, int base, char stop, MBox *b) {
     int x0 = x, lastc = 0, asc = 0, desc = 0;
     for (;;) {
         char c = **p;
-        Box a; int gap = level ? 2 : 3, pre = 0, post = 0, sw, up, sh;
+        MBox a; int gap = level ? 2 : 3, pre = 0, post = 0, sw, up, sh;
         if (c == 0) break;
         if (c == stop && stop) { (*p)++; break; }
         if (c == '}') { (*p)++; continue; }
@@ -285,7 +285,7 @@ static void m_seq(const char **p, int level, int fd, int tm, int x, int base, ch
         lastc = (c == '\\') ? ((*p)[-1] == '*' ? '*' : 'a') : c;
         sw = 0;
         while (**p == '_' || **p == '^') {
-            Box s;
+            MBox s;
             up = (**p == '^'); (*p)++;
             sh = up ? -(level ? 3 : 5) : (level ? 2 : 3);
             m_atom(p, 1, fd, tm, x, base + sh, &s);
@@ -299,14 +299,14 @@ static void m_seq(const char **p, int level, int fd, int tm, int x, int base, ch
     b->w = x - x0; b->asc = asc; b->desc = desc;
 }
 
-static void math_measure(const char *s, Box *b) {
+static void math_measure(const char *s, MBox *b) {
     int o = M_DRAW; M_DRAW = 0;
     m_seq(&s, 0, 0, 0, 0, 0, 0, b);
     M_DRAW = o;
 }
 
 static void math_draw(const char *s, int x, int base, unsigned short fg, unsigned short bg) {
-    Box b; int of = M_FG, ob = M_BG, od = M_DRAW;
+    MBox b; int of = M_FG, ob = M_BG, od = M_DRAW;
     M_FG = fg; M_BG = bg; M_DRAW = 1;
     m_seq(&s, 0, 0, 0, x, base, 0, &b);
     M_FG = (unsigned short)of; M_BG = (unsigned short)ob; M_DRAW = od;
@@ -315,7 +315,7 @@ static void math_draw(const char *s, int x, int base, unsigned short fg, unsigne
 /* dibuja la formula centrada dentro de un rectangulo */
 static void math_center(const char *s, int rx, int ry, int rw, int rh,
                         unsigned short fg, unsigned short bg) {
-    Box b;
+    MBox b;
     math_measure(s, &b);
     math_draw(s, rx + (rw - b.w) / 2, ry + (rh - (b.asc + b.desc)) / 2 + b.asc, fg, bg);
 }
