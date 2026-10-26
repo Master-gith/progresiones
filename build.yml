@@ -1,0 +1,61 @@
+name: Compilar g3a
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probar logica (PC)
+        run: make test
+
+      - name: Dependencias
+        run: sudo apt-get update && sudo apt-get install -y build-essential texinfo libgmp-dev libmpfr-dev libmpc-dev libpng-dev cmake
+
+      - name: Cache toolchain
+        id: cache-tc
+        uses: actions/cache@v4
+        with:
+          path: ~/sh3eb
+          key: sh3eb-gcc11.2-binutils2.37-v1
+
+      - name: Compilar cross-compiler sh3eb-elf (solo la primera vez, ~30 min)
+        if: steps.cache-tc.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          cd /tmp
+          wget -q https://ftp.gnu.org/gnu/binutils/binutils-2.37.tar.xz
+          wget -q https://ftp.gnu.org/gnu/gcc/gcc-11.2.0/gcc-11.2.0.tar.xz
+          tar xf binutils-2.37.tar.xz && tar xf gcc-11.2.0.tar.xz
+          mkdir bu && cd bu
+          ../binutils-2.37/configure --target=sh3eb-elf --prefix=$HOME/sh3eb --disable-nls
+          make -j$(nproc) && make install
+          cd /tmp && mkdir gc && cd gc
+          export PATH=$HOME/sh3eb/bin:$PATH
+          ../gcc-11.2.0/configure --target=sh3eb-elf --prefix=$HOME/sh3eb --disable-nls \
+            --enable-languages=c --without-headers --disable-multilib --disable-libssp \
+            --disable-shared --with-multilib-list=m4a-nofpu
+          make -j$(nproc) all-gcc all-target-libgcc
+          make install-gcc install-target-libgcc
+
+      - name: mkg3a y libfxcg
+        run: |
+          set -e
+          export PATH=$HOME/sh3eb/bin:$PATH
+          git clone --depth 1 https://github.com/tari01/mkg3a.git /tmp/mkg3a
+          cd /tmp/mkg3a && cmake . && make && sudo make install
+          git clone --depth 1 https://github.com/Jonimoose/libfxcg.git $HOME/libfxcg
+          cd $HOME/libfxcg && make
+
+      - name: Compilar g3a
+        run: |
+          export PATH=$HOME/sh3eb/bin:$PATH
+          make FXCGSDK=$HOME/libfxcg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: progresiones-g3a
+          path: progresiones.g3a
