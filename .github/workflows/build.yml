@@ -45,7 +45,7 @@ jobs:
         run: |
           set -e
           export PATH=$HOME/sh3eb/bin:$PATH
-          git clone --depth 1 https://github.com/tari01/mkg3a.git /tmp/mkg3a
+          git clone --depth 1 https://github.com/tari/mkg3a.git /tmp/mkg3a
           cd /tmp/mkg3a && cmake . && make && sudo make install
           git clone --depth 1 https://github.com/Jonimoose/libfxcg.git $HOME/libfxcg
           cd $HOME/libfxcg && make
