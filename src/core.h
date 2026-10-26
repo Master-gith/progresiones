@@ -1,17 +1,20 @@
 /* core.h - Logica de calculo de progresiones (sin dependencias de Casio).
- * Se puede probar en PC con tests/test_core.c                          */
+ * Cada paso del procedimiento se guarda como "formula" (ver gfx.h):
+ *   \f{a}{b} fraccion, \r{a} raiz, \p{a} parentesis grandes, _ ^ indices. */
 #ifndef CORE_H
 #define CORE_H
 
 typedef unsigned long long u64;
 
-#define COLS    21          /* columnas de texto por fila en la fx-CG50 */
-#define MAXROWS 60          /* filas maximas del procedimiento          */
+#define MAXL  14            /* lineas maximas del procedimiento */
+#define LINEW 120
 
 typedef struct {
-    char rows[MAXROWS][COLS + 1];
+    char l[MAXL][LINEW];
     int  n;
-    char cur[96];
+    int  res;               /* indice de la linea del resultado (-1 = ninguna) */
+    int  err;               /* 1 si es un mensaje de error                     */
+    char cur[LINEW];
     int  cl;
 } Out;
 
@@ -158,40 +161,40 @@ static int c_parse(const char *s, double *out) {
 }
 
 /* ---------------------------------------------------------------- */
-/*  Salida con ajuste de linea                                      */
+/*  Salida: cada linea es una formula en el lenguaje de gfx.h       */
 /* ---------------------------------------------------------------- */
-static void o_begin(Out *o) { o->n = 0; o->cl = 0; o->cur[0] = 0; }
+static void o_begin(Out *o) { o->n = 0; o->res = -1; o->err = 0; o->cl = 0; o->cur[0] = 0; }
 
 static void o_s(Out *o, const char *s) {
-    while (*s && o->cl < 94) { o->cur[o->cl++] = *s++; }
+    while (*s && o->cl < LINEW - 2) { o->cur[o->cl++] = *s++; }
     o->cur[o->cl] = 0;
 }
 
-static void o_n(Out *o, double x) { char b[40]; c_fmt(x, b); o_s(o, b); }
+/* numero en formato de formula (3.5E12 -> 3.5 x 10^12) */
+static void o_n(Out *o, double x) {
+    char b[40]; int i;
+    c_fmt(x, b);
+    for (i = 0; b[i]; i++) {
+        if (b[i] == 'E') {
+            o_s(o, "\\x10^{");
+            o_s(o, b + i + 1);
+            o_s(o, "}");
+            return;
+        }
+        { char t[2]; t[0] = b[i]; t[1] = 0; o_s(o, t); }
+    }
+}
 
 static void o_p(Out *o, double x) {            /* con parentesis si es negativo */
     if (x < 0) { o_s(o, "("); o_n(o, x); o_s(o, ")"); } else o_n(o, x);
 }
 
-static void o_push(Out *o, const char *s, int len) {
-    int i;
-    if (o->n >= MAXROWS) return;
-    for (i = 0; i < len && i < COLS; i++) o->rows[o->n][i] = s[i];
-    o->rows[o->n][i] = 0;
-    o->n++;
-}
-
 static void o_end(Out *o) {
-    int pos = 0, len = o->cl, take, sp, i;
-    if (len == 0) o_push(o, "", 0);
-    while (pos < len) {
-        if (len - pos <= COLS) { take = len - pos; o_push(o, o->cur + pos, take); pos = len; }
-        else {
-            sp = -1;
-            for (i = pos + COLS; i > pos; i--) if (o->cur[i] == ' ') { sp = i; break; }
-            if (sp > pos) { o_push(o, o->cur + pos, sp - pos); pos = sp + 1; }
-            else          { o_push(o, o->cur + pos, COLS);     pos += COLS; }
-        }
+    if (o->n < MAXL) {
+        int i;
+        for (i = 0; i < o->cl; i++) o->l[o->n][i] = o->cur[i];
+        o->l[o->n][o->cl] = 0;
+        o->n++;
     }
     o->cl = 0; o->cur[0] = 0;
 }
@@ -203,13 +206,19 @@ static void o_end(Out *o) {
 
 static int o_err(Out *o, const char *msg) {
     o_begin(o);
-    S("ERROR:"); E();
-    S(msg); E();
+    o->err = 1;
+    S("\\t{ERROR}"); E();
+    S("\\t{"); S(msg); S("}"); E();
     return 0;
 }
 
 static void o_res(Out *o, const char *name, double x) {
-    S("=> "); S(name); S(" = "); R(x); E();
+    S(name); S("="); R(x); E();
+    o->res = o->n - 1;
+}
+
+static void o_warn(Out *o, const char *msg) {
+    S("\\t{"); S(msg); S("}"); E();
 }
 
 /* ---------------------------------------------------------------- */
@@ -218,14 +227,14 @@ static void o_res(Out *o, const char *name, double x) {
 /* v = {t1, n, r} */
 static int f_pa_tn(const double *v, Out *o) {
     double t1 = v[0], n = v[1], r = v[2], a, b;
-    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser entero >= 1");
+    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser un entero \xE2\x89\xA5 1");
     a = n - 1; b = a * r;
     o_begin(o);
-    S("tn = t1 + (n-1)r"); E();
-    S("tn = "); N(t1); S(" + ("); R(n); S("-1)("); R(r); S(")"); E();
-    S("tn = "); N(t1); S(" + ("); R(a); S(")("); R(r); S(")"); E();
-    S("tn = "); N(t1); S(" + "); N(b); E();
-    o_res(o, "tn", t1 + b);
+    S("t_n=t_1+(n-1)r"); E();
+    S("t_n="); N(t1); S("+("); R(n); S("-1)("); R(r); S(")"); E();
+    S("t_n="); N(t1); S("+("); R(a); S(")("); R(r); S(")"); E();
+    S("t_n="); N(t1); S("+"); N(b); E();
+    o_res(o, "t_n", t1 + b);
     return 1;
 }
 
@@ -235,12 +244,12 @@ static int f_pa_n(const double *v, Out *o) {
     if (r == 0) return o_err(o, "r no puede ser 0");
     d = tn - t1; q = d / r; n = q + 1;
     o_begin(o);
-    S("n = (tn-t1)/r + 1"); E();
-    S("n = ("); R(tn); S("-"); N(t1); S(")/"); N(r); S(" + 1"); E();
-    S("n = "); N(d); S("/"); N(r); S(" + 1"); E();
-    S("n = "); N(q); S(" + 1"); E();
+    S("n=\\f{t_n-t_1}{r}+1"); E();
+    S("n=\\f{"); R(tn); S("-"); N(t1); S("}{"); N(r); S("}+1"); E();
+    S("n=\\f{"); R(d); S("}{"); N(r); S("}+1"); E();
+    S("n="); N(q); S("+1"); E();
     o_res(o, "n", n);
-    if (!c_isint(n) || n < 1) { S("Aviso: n no es entero"); E(); S("positivo, datos no"); E(); S("forman una P.A."); E(); }
+    if (!c_isint(n) || n < 1) o_warn(o, "Aviso: n no es entero positivo; los datos no forman una P.A.");
     return 1;
 }
 
@@ -248,37 +257,37 @@ static int f_pa_n(const double *v, Out *o) {
 static int f_pa_sn(const double *v, Out *o) {
     double t1 = v[0], tn = v[1], n = v[2], s = t1 + tn, h = s / 2;
     o_begin(o);
-    S("Sn = ((t1+tn)/2)n"); E();
-    S("Sn = (("); R(t1); S("+"); N(tn); S(")/2)("); R(n); S(")"); E();
-    S("Sn = ("); N(s); S("/2)("); R(n); S(")"); E();
-    S("Sn = ("); N(h); S(")("); R(n); S(")"); E();
-    o_res(o, "Sn", h * n);
+    S("S_n=\\p{\\f{t_1+t_n}{2}}\\*n"); E();
+    S("S_n=\\p{\\f{"); R(t1); S("+"); N(tn); S("}{2}}\\*"); N(n); E();
+    S("S_n=\\p{\\f{"); R(s); S("}{2}}\\*"); N(n); E();
+    S("S_n="); N(h); S("\\*"); N(n); E();
+    o_res(o, "S_n", h * n);
     return 1;
 }
 
 /* v = {t1, n, r} */
 static int f_pa_sn2(const double *v, Out *o) {
     double t1 = v[0], n = v[1], r = v[2], a, b, c, d;
-    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser entero >= 1");
+    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser un entero \xE2\x89\xA5 1");
     a = 2 * t1; b = (n - 1) * r; c = a + b; d = n / 2;
     o_begin(o);
-    S("Sn = n/2[2t1+(n-1)r]"); E();
-    S("Sn = "); R(n); S("/2[2("); R(t1); S(")+("); R(n); S("-1)("); R(r); S(")]"); E();
-    S("Sn = "); N(d); S("[ "); N(a); S(" + "); N(b); S(" ]"); E();
-    S("Sn = "); N(d); S("("); R(c); S(")"); E();
-    o_res(o, "Sn", d * c);
+    S("S_n=\\f{n}{2}[2t_1+(n-1)r]"); E();
+    S("S_n=\\f{"); R(n); S("}{2}[2("); R(t1); S(")+("); R(n); S("-1)("); R(r); S(")]"); E();
+    S("S_n=\\f{"); R(n); S("}{2}["); N(a); S("+"); N(b); S("]"); E();
+    S("S_n=\\f{"); R(n); S("}{2}("); R(c); S(")"); E();
+    o_res(o, "S_n", d * c);
     return 1;
 }
 
 /* v = {t1, tn, n} */
 static int f_pa_r(const double *v, Out *o) {
     double t1 = v[0], tn = v[1], n = v[2], d, m;
-    if (!c_isint(n) || n < 2) return o_err(o, "n debe ser entero >= 2");
+    if (!c_isint(n) || n < 2) return o_err(o, "n debe ser un entero \xE2\x89\xA5 2");
     d = tn - t1; m = n - 1;
     o_begin(o);
-    S("r = (tn-t1)/(n-1)"); E();
-    S("r = ("); R(tn); S("-"); N(t1); S(")/("); R(n); S("-1)"); E();
-    S("r = "); N(d); S("/"); N(m); E();
+    S("r=\\f{t_n-t_1}{n-1}"); E();
+    S("r=\\f{"); R(tn); S("-"); N(t1); S("}{"); R(n); S("-1}"); E();
+    S("r=\\f{"); R(d); S("}{"); R(m); S("}"); E();
     o_res(o, "r", d / m);
     return 1;
 }
@@ -286,14 +295,14 @@ static int f_pa_r(const double *v, Out *o) {
 /* v = {tn, n, r} */
 static int f_pa_t1(const double *v, Out *o) {
     double tn = v[0], n = v[1], r = v[2], m, b;
-    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser entero >= 1");
+    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser un entero \xE2\x89\xA5 1");
     m = n - 1; b = m * r;
     o_begin(o);
-    S("t1 = tn - (n-1)r"); E();
-    S("t1 = "); R(tn); S(" - ("); R(n); S("-1)("); R(r); S(")"); E();
-    S("t1 = "); R(tn); S(" - ("); R(m); S(")("); R(r); S(")"); E();
-    S("t1 = "); R(tn); S(" - "); N(b); E();
-    o_res(o, "t1", tn - b);
+    S("t_1=t_n-(n-1)r"); E();
+    S("t_1="); R(tn); S("-("); R(n); S("-1)("); R(r); S(")"); E();
+    S("t_1="); R(tn); S("-("); R(m); S(")("); R(r); S(")"); E();
+    S("t_1="); R(tn); S("-"); N(b); E();
+    o_res(o, "t_1", tn - b);
     return 1;
 }
 
@@ -301,10 +310,10 @@ static int f_pa_t1(const double *v, Out *o) {
 static int f_pa_tm(const double *v, Out *o) {
     double t1 = v[0], tn = v[1], s = t1 + tn;
     o_begin(o);
-    S("tm = (t1 + tn)/2"); E();
-    S("tm = ("); R(t1); S(" + "); N(tn); S(")/2"); E();
-    S("tm = "); N(s); S("/2"); E();
-    o_res(o, "tm", s / 2);
+    S("t_m=\\f{t_1+t_n}{2}"); E();
+    S("t_m=\\f{"); R(t1); S("+"); N(tn); S("}{2}"); E();
+    S("t_m=\\f{"); R(s); S("}{2}"); E();
+    o_res(o, "t_m", s / 2);
     return 1;
 }
 
@@ -314,49 +323,46 @@ static int f_pa_tm(const double *v, Out *o) {
 /* v = {t1, n, q} */
 static int f_pg_tn(const double *v, Out *o) {
     double t1 = v[0], n = v[1], q = v[2], m, p;
-    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser entero >= 1");
+    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser un entero \xE2\x89\xA5 1");
     m = n - 1; p = c_ipow(q, (long)m);
     o_begin(o);
-    S("tn = t1 . q^(n-1)"); E();
-    S("tn = "); R(t1); S(" . ("); R(q); S(")^("); R(n); S("-1)"); E();
-    S("tn = "); R(t1); S(" . ("); R(q); S(")^"); R(m); E();
-    S("tn = "); R(t1); S(" . "); N(p); E();
-    o_res(o, "tn", t1 * p);
+    S("t_n=t_1\\*q^{n-1}"); E();
+    S("t_n="); N(t1); S("\\*"); N(q); S("^{"); R(n); S("-1}"); E();
+    S("t_n="); N(t1); S("\\*"); N(q); S("^{"); R(m); S("}"); E();
+    S("t_n="); N(t1); S("\\*"); N(p); E();
+    o_res(o, "t_n", t1 * p);
     return 1;
 }
 
 /* v = {t1, q, n} */
 static int f_pg_sn(const double *v, Out *o) {
     double t1 = v[0], q = v[1], n = v[2], p, a, b;
-    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser entero >= 1");
+    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser un entero \xE2\x89\xA5 1");
     o_begin(o);
     if (q == 1) {
-        S("q = 1 -> Sn = n.t1"); E();
-        S("Sn = "); R(n); S(" . "); N(t1); E();
-        o_res(o, "Sn", n * t1);
+        S("\\t{Como }q=1\\t{: }S_n=n\\*t_1"); E();
+        S("S_n="); R(n); S("\\*"); N(t1); E();
+        o_res(o, "S_n", n * t1);
         return 1;
     }
     p = c_ipow(q, (long)n); a = p - 1; b = q - 1;
-    S("Sn = t1(q^n - 1)"); E();
-    S("      ----------"); E();
-    S("         q - 1"); E();
-    S("Sn = "); R(t1); S("(("); R(q); S(")^"); R(n); S("-1)/("); R(q); S("-1)"); E();
-    S("Sn = "); R(t1); S("("); N(p); S("-1)/("); N(b); S(")"); E();
-    S("Sn = "); R(t1); S("("); N(a); S(")/("); N(b); S(")"); E();
-    S("Sn = "); N(t1 * a); S("/"); N(b); E();
-    o_res(o, "Sn", t1 * a / b);
+    S("S_n=\\f{t_1(q^n-1)}{q-1}"); E();
+    S("S_n=\\f{"); R(t1); S("("); N(q); S("^{"); R(n); S("}-1)}{"); N(q); S("-1}"); E();
+    S("S_n=\\f{"); R(t1); S("("); R(p); S("-1)}{"); R(b); S("}"); E();
+    S("S_n=\\f{"); R(t1 * a); S("}{"); R(b); S("}"); E();
+    o_res(o, "S_n", t1 * a / b);
     return 1;
 }
 
 /* v = {t1, q} */
 static int f_pg_s(const double *v, Out *o) {
     double t1 = v[0], q = v[1], d;
-    if (q <= -1 || q >= 1) return o_err(o, "Se requiere |q| < 1");
+    if (q <= -1 || q >= 1) return o_err(o, "Se requiere  0 < q < 1 (|q| < 1)");
     d = 1 - q;
     o_begin(o);
-    S("S = t1 / (1 - q)"); E();
-    S("S = "); R(t1); S(" / (1 - "); N(q); S(")"); E();
-    S("S = "); R(t1); S(" / "); N(d); E();
+    S("S=\\f{t_1}{1-q}"); E();
+    S("S=\\f{"); R(t1); S("}{1-"); N(q); S("}"); E();
+    S("S=\\f{"); R(t1); S("}{"); R(d); S("}"); E();
     o_res(o, "S", t1 / d);
     return 1;
 }
@@ -364,15 +370,15 @@ static int f_pg_s(const double *v, Out *o) {
 /* v = {t1, tn, n} */
 static int f_pg_pn(const double *v, Out *o) {
     double t1 = v[0], tn = v[1], n = v[2], p, pw;
-    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser entero >= 1");
+    if (!c_isint(n) || n < 1) return o_err(o, "n debe ser un entero \xE2\x89\xA5 1");
     p = t1 * tn; pw = c_ipow(p, (long)n);
-    if (pw < 0) return o_err(o, "(t1.tn)^n es negativo");
+    if (pw < 0) return o_err(o, "(t1\xC2\xB7tn)^n es negativo: no hay ra\xC3\xADz real");
     o_begin(o);
-    S("Pn = sqrt[(t1.tn)^n]"); E();
-    S("Pn = sqrt[("); R(t1); S(" . "); N(tn); S(")^"); R(n); S("]"); E();
-    S("Pn = sqrt[("); N(p); S(")^"); R(n); S("]"); E();
-    S("Pn = sqrt["); N(pw); S("]"); E();
-    o_res(o, "Pn", c_sqrt(pw));
+    S("P_n=\\r{(t_1\\*t_n)^n}"); E();
+    S("P_n=\\r{("); R(t1); S("\\*"); N(tn); S(")^{"); R(n); S("}}"); E();
+    S("P_n=\\r{("); R(p); S(")^{"); R(n); S("}}"); E();
+    S("P_n=\\r{"); R(pw); S("}"); E();
+    o_res(o, "P_n", c_sqrt(pw));
     return 1;
 }
 
@@ -380,7 +386,7 @@ static int f_pg_pn(const double *v, Out *o) {
 static int f_pg_q(const double *v, Out *o) {
     double t1 = v[0], tn = v[1], n = v[2], ra, m, q;
     int neg = 0;
-    if (!c_isint(n) || n < 2) return o_err(o, "n debe ser entero >= 2");
+    if (!c_isint(n) || n < 2) return o_err(o, "n debe ser un entero \xE2\x89\xA5 2");
     if (t1 == 0) return o_err(o, "t1 no puede ser 0");
     ra = tn / t1; m = n - 1;
     if (ra == 0) return o_err(o, "tn no puede ser 0");
@@ -390,33 +396,30 @@ static int f_pg_q(const double *v, Out *o) {
     }
     q = c_exp(c_ln(ra) / m); if (neg) q = -q;
     o_begin(o);
-    S("q = (tn/t1)^(1/(n-1))"); E();
-    S("q = ("); R(tn); S("/"); N(t1); S(")^(1/"); R(m); S(")"); E();
-    S("q = ("); R(tn / t1); S(")^(1/"); R(m); S(")"); E();
+    S("q=\\p{\\f{t_n}{t_1}}^{\\f{1}{n-1}}"); E();
+    S("q=\\p{\\f{"); R(tn); S("}{"); R(t1); S("}}^{\\f{1}{"); R(n); S("-1}}"); E();
+    S("q=\\p{"); R(tn / t1); S("}^{\\f{1}{"); R(m); S("}}"); E();
     o_res(o, "q", q);
-    if (!neg && (((long)m) % 2 == 0)) { S("(tambien q = -"); R(q); S(")"); E(); }
+    if (!neg && (((long)m) % 2 == 0)) { S("\\t{Tambi\xC3\xA9n existe }q=-"); R(q); E(); }
     return 1;
 }
 
 /* v = {t1, tn, q} */
 static int f_pg_n(const double *v, Out *o) {
-    double t1 = v[0], tn = v[1], q = v[2], ra, a, b, n;
+    double t1 = v[0], tn = v[1], q = v[2], ra, a, b, n, rn, df;
     if (t1 == 0) return o_err(o, "t1 no puede ser 0");
     ra = tn / t1;
-    if (ra <= 0)  return o_err(o, "tn/t1 debe ser > 0");
-    if (q <= 0 || q == 1) return o_err(o, "q debe ser > 0 y q<>1");
+    if (ra <= 0)  return o_err(o, "tn/t1 debe ser mayor que 0");
+    if (q <= 0 || q == 1) return o_err(o, "q debe ser > 0 y distinto de 1");
     a = c_ln(ra); b = c_ln(q); n = a / b + 1;
     o_begin(o);
-    S("n = log(tn/t1) / log(q) + 1"); E();
-    S("n = log("); R(ra); S(") / log("); R(q); S(") + 1"); E();
-    S("n = "); R(a); S(" / "); R(b); S(" + 1"); E();
-    S("(log natural)"); E();
+    S("n=\\f{\\t{ln}\\p{\\f{t_n}{t_1}}}{\\t{ln}\\p{q}}+1"); E();
+    S("n=\\f{\\t{ln}("); R(ra); S(")}{\\t{ln}("); R(q); S(")}+1"); E();
+    S("n=\\f{"); R(a); S("}{"); R(b); S("}+1"); E();
     o_res(o, "n", n);
-    {
-        double rn = (double)((long)(n + 0.5));
-        double df = n - rn; if (df < 0) df = -df;
-        if (df > 1e-6) { S("Aviso: n no es entero"); E(); }
-    }
+    rn = (double)((long)(n + 0.5));
+    df = n - rn; if (df < 0) df = -df;
+    if (df > 1e-6) o_warn(o, "Aviso: n no es entero; los datos no forman una P.G.");
     return 1;
 }
 
@@ -424,33 +427,77 @@ static int f_pg_n(const double *v, Out *o) {
 /*  Tabla de formulas                                               */
 /* ---------------------------------------------------------------- */
 typedef struct {
-    const char *cat;        /* categoria                         */
-    const char *desc;       /* descripcion (max 21 car.)         */
-    const char *form;       /* formula corta para el menu        */
-    int nv;                 /* cantidad de variables             */
-    const char *vn[3];      /* nombre de cada variable           */
-    const char *vd[3];      /* descripcion de cada variable      */
+    int cat;                /* 0 = P.A., 1 = P.G.                            */
+    const char *name;       /* nombre                                        */
+    const char *form;       /* formula (lenguaje de gfx.h)                   */
+    const char *use;        /* para que sirve                                */
+    int nv;                 /* cantidad de variables                         */
+    const char *vn[3];      /* simbolo de cada variable                      */
+    const char *vd[3];      /* significado de cada simbolo                   */
     int (*fn)(const double *, Out *);
 } Formula;
 
 #define NFORM 13
 
+static const char *CATS[2] = {
+    "PROGRESI\xC3\x93N ARITM\xC3\x89TICA (P.A.)",
+    "PROGRESI\xC3\x93N GEOM\xC3\x89TRICA (P.G.)"
+};
+
 static const Formula FORMS[NFORM] = {
- /* ---- P.A. ---- */
- {"PROG. ARITMETICA", "Termino enesimo",       "tn=t1+(n-1)r",   3, {"t1","n","r"},   {"Primer termino","Posicion n","Razon aritmetica r"}, f_pa_tn},
- {"PROG. ARITMETICA", "Cantidad de terminos",  "n=(tn-t1)/r+1",  3, {"t1","tn","r"},  {"Primer termino","Termino enesimo","Razon aritmetica r"}, f_pa_n},
- {"PROG. ARITMETICA", "Suma de n terminos",    "Sn=((t1+tn)/2)n",3, {"t1","tn","n"},  {"Primer termino","Termino enesimo","Numero de terminos"}, f_pa_sn},
- {"PROG. ARITMETICA", "Suma usando la razon",  "Sn=n/2[2t1+(n-1)r]",3,{"t1","n","r"}, {"Primer termino","Numero de terminos","Razon aritmetica r"}, f_pa_sn2},
- {"PROG. ARITMETICA", "Hallar la razon r",     "r=(tn-t1)/(n-1)",3, {"t1","tn","n"},  {"Primer termino","Termino enesimo","Numero de terminos"}, f_pa_r},
- {"PROG. ARITMETICA", "Hallar el 1er termino", "t1=tn-(n-1)r",   3, {"tn","n","r"},   {"Termino enesimo","Numero de terminos","Razon aritmetica r"}, f_pa_t1},
- {"PROG. ARITMETICA", "Termino central",       "tm=(t1+tn)/2",   2, {"t1","tn",""},   {"Primer termino","Ultimo termino",""}, f_pa_tm},
- /* ---- P.G. ---- */
- {"PROG. GEOMETRICA", "Termino enesimo",       "tn=t1.q^(n-1)",  3, {"t1","n","q"},   {"Primer termino","Posicion n","Razon geometrica q"}, f_pg_tn},
- {"PROG. GEOMETRICA", "Suma finita de n term.","Sn=t1(q^n-1)/(q-1)",3,{"t1","q","n"}, {"Primer termino","Razon geometrica q","Numero de terminos"}, f_pg_sn},
- {"PROG. GEOMETRICA", "Suma infinita decrec.", "S=t1/(1-q)",     2, {"t1","q",""},    {"Primer termino","Razon q (|q|<1)",""}, f_pg_s},
- {"PROG. GEOMETRICA", "Producto de n terminos","Pn=sqrt[(t1.tn)^n]",3,{"t1","tn","n"}, {"Primer termino","Termino enesimo","Numero de terminos"}, f_pg_pn},
- {"PROG. GEOMETRICA", "Hallar la razon q",     "q=(tn/t1)^(1/(n-1))",3,{"t1","tn","n"},{"Primer termino","Termino enesimo","Numero de terminos"}, f_pg_q},
- {"PROG. GEOMETRICA", "Hallar n (cantidad)",   "n=log(tn/t1)/log q+1",3,{"t1","tn","q"},{"Primer termino","Termino enesimo","Razon geometrica q"}, f_pg_n},
+ /* ------------------------- P.A. ------------------------- */
+ {0, "T\xC3\xA9rmino en\xC3\xA9simo", "t_n=t_1+(n-1)r",
+  "Calcula el valor del t\xC3\xA9rmino que ocupa la posici\xC3\xB3n n dentro de la progresi\xC3\xB3n.",
+  3, {"t_1","n","r"}, {"Primer t\xC3\xA9rmino","Posici\xC3\xB3n del t\xC3\xA9rmino","Raz\xC3\xB3n aritm\xC3\xA9tica (+)"}, f_pa_tn},
+
+ {0, "Cantidad de t\xC3\xA9rminos", "n=\\f{t_n-t_1}{r}+1",
+  "Averigua cu\xC3\xA1ntos t\xC3\xA9rminos hay entre el primero (t1) y el t\xC3\xA9rmino tn.",
+  3, {"t_1","t_n","r"}, {"Primer t\xC3\xA9rmino","T\xC3\xA9rmino en\xC3\xA9simo (\xC3\xBAltimo)","Raz\xC3\xB3n aritm\xC3\xA9tica (+)"}, f_pa_n},
+
+ {0, "Suma de los n primeros t\xC3\xA9rminos", "S_n=\\p{\\f{t_1+t_n}{2}}\\*n",
+  "Suma todos los t\xC3\xA9rminos, desde el primero hasta el que ocupa la posici\xC3\xB3n n.",
+  3, {"t_1","t_n","n"}, {"Primer t\xC3\xA9rmino","T\xC3\xA9rmino en\xC3\xA9simo (\xC3\xBAltimo)","N\xC3\xBAmero de t\xC3\xA9rminos"}, f_pa_sn},
+
+ {0, "Suma usando la raz\xC3\xB3n", "S_n=\\f{n}{2}[2t_1+(n-1)r]",
+  "Suma los n primeros t\xC3\xA9rminos cuando no se conoce tn pero s\xC3\xAD la raz\xC3\xB3n r.",
+  3, {"t_1","n","r"}, {"Primer t\xC3\xA9rmino","N\xC3\xBAmero de t\xC3\xA9rminos","Raz\xC3\xB3n aritm\xC3\xA9tica (+)"}, f_pa_sn2},
+
+ {0, "Hallar la raz\xC3\xB3n (r)", "r=\\f{t_n-t_1}{n-1}",
+  "Obtiene la raz\xC3\xB3n aritm\xC3\xA9tica conociendo el primer t\xC3\xA9rmino, el \xC3\xBAltimo y n.",
+  3, {"t_1","t_n","n"}, {"Primer t\xC3\xA9rmino","T\xC3\xA9rmino en\xC3\xA9simo (\xC3\xBAltimo)","N\xC3\xBAmero de t\xC3\xA9rminos"}, f_pa_r},
+
+ {0, "Hallar el primer t\xC3\xA9rmino", "t_1=t_n-(n-1)r",
+  "Calcula t1 a partir de un t\xC3\xA9rmino tn, su posici\xC3\xB3n n y la raz\xC3\xB3n r.",
+  3, {"t_n","n","r"}, {"T\xC3\xA9rmino en\xC3\xA9simo","Posici\xC3\xB3n del t\xC3\xA9rmino","Raz\xC3\xB3n aritm\xC3\xA9tica (+)"}, f_pa_t1},
+
+ {0, "T\xC3\xA9rmino central", "t_m=\\f{t_1+t_n}{2}",
+  "Calcula el t\xC3\xA9rmino del medio: es el promedio entre el primero y el \xC3\xBAltimo.",
+  2, {"t_1","t_n",""}, {"Primer t\xC3\xA9rmino","\xC3\x9Altimo t\xC3\xA9rmino",""}, f_pa_tm},
+
+ /* ------------------------- P.G. ------------------------- */
+ {1, "T\xC3\xA9rmino en\xC3\xA9simo", "t_n=t_1\\*q^{n-1}",
+  "Calcula el t\xC3\xA9rmino de la posici\xC3\xB3n n multiplicando t1 por la raz\xC3\xB3n q, (n\xE2\x88\x92" "1) veces.",
+  3, {"t_1","n","q"}, {"Primer t\xC3\xA9rmino","Posici\xC3\xB3n del t\xC3\xA9rmino","Raz\xC3\xB3n geom\xC3\xA9trica (\xC3\x97)"}, f_pg_tn},
+
+ {1, "Suma finita de n t\xC3\xA9rminos", "S_n=\\f{t_1(q^n-1)}{q-1}",
+  "Suma los n primeros t\xC3\xA9rminos de la P.G. Si q = 1, la suma es simplemente n\xC2\xB7t1.",
+  3, {"t_1","q","n"}, {"Primer t\xC3\xA9rmino","Raz\xC3\xB3n geom\xC3\xA9trica (\xC3\x97)","N\xC3\xBAmero de t\xC3\xA9rminos"}, f_pg_sn},
+
+ {1, "Suma infinita decreciente", "S=\\f{t_1}{1-q}",
+  "Suma de infinitos t\xC3\xA9rminos cuando 0 < q < 1: el resultado se acerca a un valor l\xC3\xADmite.",
+  2, {"t_1","q",""}, {"Primer t\xC3\xA9rmino","Raz\xC3\xB3n geom\xC3\xA9trica (0 < q < 1)",""}, f_pg_s},
+
+ {1, "Producto de n t\xC3\xA9rminos", "P_n=\\r{(t_1\\*t_n)^n}",
+  "Multiplica los n primeros t\xC3\xA9rminos usando solo el primero y el \xC3\xBAltimo.",
+  3, {"t_1","t_n","n"}, {"Primer t\xC3\xA9rmino","T\xC3\xA9rmino en\xC3\xA9simo (\xC3\xBAltimo)","N\xC3\xBAmero de t\xC3\xA9rminos"}, f_pg_pn},
+
+ {1, "Hallar la raz\xC3\xB3n (q)", "q=\\p{\\f{t_n}{t_1}}^{\\f{1}{n-1}}",
+  "Obtiene la raz\xC3\xB3n geom\xC3\xA9trica conociendo t1, tn y la cantidad de t\xC3\xA9rminos n.",
+  3, {"t_1","t_n","n"}, {"Primer t\xC3\xA9rmino","T\xC3\xA9rmino en\xC3\xA9simo (\xC3\xBAltimo)","N\xC3\xBAmero de t\xC3\xA9rminos"}, f_pg_q},
+
+ {1, "Hallar n (cantidad)", "n=\\f{\\t{ln}\\p{\\f{t_n}{t_1}}}{\\t{ln}\\p{q}}+1",
+  "Averigua cu\xC3\xA1ntos t\xC3\xA9rminos tiene la P.G. a partir de t1, tn y la raz\xC3\xB3n q (usa logaritmos).",
+  3, {"t_1","t_n","q"}, {"Primer t\xC3\xA9rmino","T\xC3\xA9rmino en\xC3\xA9simo (\xC3\xBAltimo)","Raz\xC3\xB3n geom\xC3\xA9trica (\xC3\x97)"}, f_pg_n},
 };
 
 #endif
